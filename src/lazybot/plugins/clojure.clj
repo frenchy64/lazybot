@@ -202,7 +202,7 @@
            (impl/impl-case
              :clojure 2 ; drop ": "
              :cljs 6)}) ; drop "cljs: "
-        {:keys [ret delayed-errors]} 
+        {:keys [ret delayed-errors result]}
         (with-bindings
           (impl/with-impl impl ;just fake it
             (impl/impl-case
@@ -221,7 +221,12 @@
                             (try 
                               (err/print-errors! delayed-errors)
                               (catch clojure.lang.ExceptionInfo e))))
-                        (-> ret :t prn-str)))))))
+                        (let [t (-> ret :t prn-str)]
+                          (str
+                            pre
+                            (impl/impl-case
+                              :clojure (str (pr-str result) " : " t)
+                              :cljs t)))))))))
 
 (defplugin
   (:hook
