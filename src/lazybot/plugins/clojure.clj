@@ -10,6 +10,12 @@
   (:require [clojure.string :as string :only [replace]]
             [clojure.walk :as walk]
             [cd-client.core :as cd]
+            [clojure.core.typed :as t]
+            [cljs.core.typed :as cljst]
+            [cljs.analyzer :as ana]
+            [clojure.core.typed.errors :as err]
+            [clojure.core.typed.current-impl :as impl]
+            [clojure.core.typed.parse-unparse :as prs]
             [me.raynes.laser :as l]
             ; these requires are for findfn
             [clojure.string :as s]
@@ -175,6 +181,48 @@
     (catch Throwable e
       (.getMessage e))))
 
+(def loaded-typed? (atom false))
+
+(defn type-check-form [impl {:keys [com bot nick channel message] :as com-m}]
+  (let [config (:config @bot)
+        clj-config (:clojure config)
+        pre (:prefix-arrow config)
+        box? (:box clj-config)
+        _ (when-not @loaded-typed?
+            (send-message com-m "Loading core.typed ...")
+            (t/load-if-needed)
+            (reset! loaded-typed? true))
+        {:keys [check-form-info drp]}
+        (impl/with-impl impl ;just fake it
+          {:check-form-info
+           (impl/impl-case
+             :clojure t/check-form-info
+             :cljs cljst/check-form-info)
+           :drp
+           (impl/impl-case
+             :clojure 2 ; drop ": "
+             :cljs 6)}) ; drop "cljs: "
+        {:keys [ret delayed-errors]} 
+        (with-bindings
+          (impl/with-impl impl ;just fake it
+            (impl/impl-case
+              :clojure {#'*ns* (find-ns 'clojure.core.typed)}
+              :cljs {#'ana/*cljs-ns* 'cljs.core.typed}))
+          (check-form-info
+           (read-string (apply str (drop drp message)))))]
+    (send-message com-m
+                  (impl/with-full-impl impl
+                    (binding [prs/*unparse-type-in-ns* (impl/impl-case
+                                                         :clojure 'clojure.core.typed
+                                                         :cljs 'cljs.core.typed)]
+                      (if (seq delayed-errors)
+                        (with-out-str
+                          (binding [*err* *out*]
+                            (try 
+                              (err/print-errors! delayed-errors)
+                              (catch clojure.lang.ExceptionInfo e))))
+                        (-> ret :t prn-str)))))))
+
 (defplugin
   (:hook
    :on-message
@@ -221,6 +269,19 @@
    #{"findarg"}
    (fn [{:keys [args] :as com-m}]
      (send-message com-m (findfn-pluginfn find-arg (string/join " " args)))))
+
+  (:cmd
+   "Typed Clojure REPL"
+   #{":"}
+   (fn [{:keys [com bot nick channel message] :as com-m}]
+     (type-check-form impl/clojure com-m)))
+
+  (:cmd
+   "Typed ClojureScript REPL"
+   #{"cljs:"}
+   (fn [{:keys [com bot nick channel message] :as com-m}]
+     (type-check-form impl/clojurescript com-m)))
+
 
   (:cmd
    "Look up the latest version of something on clojars."
